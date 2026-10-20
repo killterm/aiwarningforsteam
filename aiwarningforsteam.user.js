@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         AI warning for Steam
 // @namespace    https://github.com/seeeeew/aiwarningforsteam
-// @version      1.1.2
+// @version      1.2.0
 // @description  Adds features to increase the visibility of AI Generated Content Disclosures.
 // @author       seeeeew
 // @homepage     https://github.com/seeeeew/aiwarningforsteam
 // @match        https://store.steampowered.com/app/*
 // @match        https://store.steampowered.com/search*
+// @match        https://store.steampowered.com/sale/*
+// @match        https://store.steampowered.com/personalcalendar*
+// @match        https://store.steampowered.com/wishlist*
 // @icon         https://raw.githubusercontent.com/seeeeew/aiwarningforsteam/refs/heads/main/img/icon128.png
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -172,6 +175,59 @@
 		style.id = "aiwarning_style";
 		document.head.append(style);
 		return style;
+	}
+
+	/** Runs at most `limit` async tasks at the same time and queues the rest. */
+	function createLimiter(limit) {
+		let active = 0;
+		const queue = [];
+		function next() {
+			if (active >= limit || queue.length === 0) return;
+			active++;
+			const {task, resolve, reject} = queue.shift();
+			task().then(resolve, reject).finally(() => {
+				active--;
+				next();
+			});
+		}
+		return (task) => new Promise((resolve, reject) => {
+			queue.push({task, resolve, reject});
+			next();
+		});
+	}
+	const limitStorePageRequests = createLimiter(3);
+
+	/** Fetches the English store page of an app and reports whether it has an AI disclosure. */
+	async function fetchAIDisclosure(appid) {
+		const url = `https://store.steampowered.com/app/${appid}?l=english`;
+		const text = await limitStorePageRequests(async () => {
+			const response = await fetch(url);
+			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			if (response.url.includes("/agecheck/")) throw new Error("Age check required");
+			return response.text();
+		});
+		return text.includes(`<h2>${msg.aidisclosure.english}</h2>`);
+	}
+
+	/** Checks an app for an AI disclosure and reflects the result as CSS classes on the element. */
+	async function check(element, appid) {
+		// Elements reused by virtualized lists may point to another app by the time the check finishes.
+		const isStale = () => element.dataset.aiwarningAppid !== undefined && element.dataset.aiwarningAppid !== appid;
+		try {
+			element.dataset.aiwarningChecked = true;
+			let aidisclosure = await AIDisclosureCache.get(appid);
+			if (aidisclosure === undefined) {
+				element.classList.add("aiwarning_checking");
+				aidisclosure = await fetchAIDisclosure(appid);
+				AIDisclosureCache.set(appid, aidisclosure);
+			}
+			if (aidisclosure && !isStale()) element.classList.add("aiwarning_hasdisclosure");
+		} catch(error) {
+			console.error(`Check for ${msg.aidisclosure.english} of App ${appid} failed.`, error);
+			if (!isStale()) element.classList.add("aiwarning_failed");
+		} finally {
+			if (!isStale()) element.classList.remove("aiwarning_checking");
+		}
 	}
 
 	if (window.location.pathname.match(/^\/app(\/|$)/)) {
@@ -405,36 +461,75 @@
 		}
 		injectSearchOptions();
 
-		async function check(row) {
-			const appid = row.dataset.dsAppid;
-			try {
-				row.dataset.aiwarningChecked = true;
-				let aidisclosure = false;
-				const cached = await AIDisclosureCache.get(appid);
-				if (cached !== undefined) {
-					aidisclosure = cached;
-				} else {
-					row.classList.add("aiwarning_checking");
-					const url = `https://store.steampowered.com/app/${appid}?l=english`;
-					const response = await fetch(url);
-					const text = await response.text();
-					const match = text.match(`<h2>${msg.aidisclosure.english}</h2>`);
-					aidisclosure = !!match;
-					AIDisclosureCache.set(appid, aidisclosure);
-				}
-				if (aidisclosure) row.classList.add("aiwarning_hasdisclosure");
-			} catch(error) {
-				console.error(`Check for ${msg.aidisclosure.english} of App ${appid} failed.`, error);
-				row.classList.add("aiwarning_failed");
-			} finally {
-				row.classList.remove("aiwarning_checking");
-			}
-		}
 		function findNew() {
 			const rows = document.querySelectorAll("#search_results[data-aiwarning]:not([data-aiwarning=show]) #search_resultsRows > a.search_result_row[data-ds-appid]:not([data-aiwarning-checked])");
-			rows.forEach(row => check(row));
+			rows.forEach(row => check(row, row.dataset.dsAppid));
 		}
 		const observer = new MutationObserver(findNew);
 		observer.observe(search_results, {childList: true, subtree: true});
+	}
+
+	if (window.location.pathname.match(/^\/(sale|personalcalendar|wishlist)(\/|$)/)) {
+		// Sale pages (e.g. Steam Next Fest), the personal calendar and the wishlist are rendered by React with
+		// obfuscated class names, so capsules are identified as links to an app page that contain an image.
+		const css = `
+			a.aiwarning_hasdisclosure > :first-child,
+			a.aiwarning_failed > :first-child {
+				position: relative;
+			}
+			a.aiwarning_hasdisclosure > :first-child::after,
+			a.aiwarning_failed > :first-child::after {
+				position: absolute;
+				top: 4px;
+				left: 4px;
+				z-index: 10;
+				padding: 2px 6px;
+				border-radius: 2px;
+				font-size: 11px;
+				font-weight: bold;
+				pointer-events: none;
+			}
+			a.aiwarning_hasdisclosure > :first-child::after {
+				content: "${msg.aidisclosure.english}";
+				background-color: #a30100;
+				color: white;
+			}
+			a.aiwarning_failed > :first-child::after {
+				content: "Checking for ${msg.aidisclosure.english} failed";
+				background-color: rgba(0, 0, 0, 0.6);
+				color: red;
+			}
+			:is([data-aiwarning=blur], [data-aiwarning=hide]) a.aiwarning_hasdisclosure:not(:hover) img {
+				filter: blur(10px);
+			}
+		`;
+		injectStyle(css);
+		// Hiding capsules would break carousel and list layouts, so "hide" falls back to blurring.
+		document.documentElement.dataset.aiwarning = await Config.get("filtermode") || "blur";
+
+		function getAppid(link) {
+			return new URL(link.href).pathname.match(/^\/app\/(?<appid>\d+)/)?.groups.appid;
+		}
+		const visibilityObserver = new IntersectionObserver((entries) => {
+			entries.filter(entry => entry.isIntersecting).forEach(({target}) => {
+				visibilityObserver.unobserve(target);
+				check(target, target.dataset.aiwarningAppid);
+			});
+		}, {rootMargin: "200px"});
+		function findNew() {
+			const links = document.querySelectorAll("a[href*='/app/']");
+			links.forEach(link => {
+				const appid = getAppid(link);
+				if (!appid || !link.querySelector("img") || link.dataset.aiwarningAppid === appid) return;
+				// The wishlist reuses links for other apps when it is re-sorted, so earlier results are reset.
+				link.classList.remove("aiwarning_hasdisclosure", "aiwarning_failed", "aiwarning_checking");
+				delete link.dataset.aiwarningChecked;
+				link.dataset.aiwarningAppid = appid;
+				visibilityObserver.observe(link);
+			});
+		}
+		findNew();
+		const observer = new MutationObserver(findNew);
+		observer.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["href"]});
 	}
 })();

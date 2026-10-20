@@ -10,6 +10,7 @@
 
 - Display the AI Generated Content Disclosure on Steam store pages as a model popup on page load, if present.
 - Blur or hide games with an AI Generated Content Disclosure on search pages in the Steam store.
+- Badge and blur games with an AI Generated Content Disclosure on sale pages such as Steam Next Fest, on the personal calendar and on wishlists. Only capsules scrolled into view are checked. The "hide" filter falls back to blurring there, because hiding capsules breaks carousel and list layouts.
 
 ## Installation
 
@@ -38,3 +39,20 @@ The extension should work in all languages officially supported by the Steam sto
 ## Project goal
 
 The purpose of this extension is to give users better visibility of information about whether generative AI was used in the creation of games they're browsing on Steam. Future updates might improve this functionality, but will not add unrelated features.
+
+## Development
+
+### Load the extension in Chrome
+
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and select this directory.
+3. After changing the code, click the reload button on the extension card and refresh the Steam page.
+
+### Run the tests
+
+The tests run the userscript in [jsdom](https://github.com/jsdom/jsdom) with mocked extension APIs, so no browser is required.
+
+```sh
+npm install
+npm test
+```

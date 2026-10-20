@@ -7,13 +7,16 @@
 	"icons": {
 		"128": "img/icon128.png"
 	},
-	"version": "1.1.2",
+	"version": "1.2.0",
 	"permissions": ["storage"],
 	"content_scripts": [
 		{
 			"matches": [
 				"*://store.steampowered.com/app/*",
-				"*://store.steampowered.com/search*"
+				"*://store.steampowered.com/search*",
+				"*://store.steampowered.com/sale/*",
+				"*://store.steampowered.com/personalcalendar*",
+				"*://store.steampowered.com/wishlist*"
 			],
 			"js": [
 				"aiwarningforsteam.user.js"
